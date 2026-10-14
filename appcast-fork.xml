@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Fork (RomainDW/DigUp): no in-app updates. The original's releases would replace this build and drop the app
+     launcher, so its changes are merged by hand and the app rebuilt instead. -->
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>DigUp (fork)</title>
+  </channel>
+</rss>

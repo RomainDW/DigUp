@@ -37,6 +37,8 @@ final class SearchPanelController {
         didSet { if query != oldValue { queryChanged() } }
     }
     private(set) var results = ResultSet.empty
+    /// Apps whose name matches, listed above the files (fork: the panel launches apps too).
+    private(set) var apps: [AppEntry] = []
     private(set) var showWeaker = false
     private(set) var selection: String?
     private(set) var phase = SearchPhase.empty
@@ -46,6 +48,7 @@ final class SearchPanelController {
     var encoder: EngineStatus.Encoder { model.status.encoder }
 
     @ObservationIgnored let model: AppModel
+    @ObservationIgnored let catalog = AppCatalog()
     @ObservationIgnored private let engine: Engine
     @ObservationIgnored private unowned let app: AppController
     @ObservationIgnored private var window: SearchPanelWindow?
@@ -82,12 +85,13 @@ final class SearchPanelController {
     var isPreviewing: Bool { QLPreviewPanel.sharedPreviewPanelExists() && QLPreviewPanel.shared().isVisible }
     /// The selectable rows in order: strong results group by group, the fold, then the weaker ones if unfolded.
     var rowIDs: [String] {
-        results.groups.flatMap { $0.rows.map(\.id) }
+        apps.map(\.id) + results.groups.flatMap { $0.rows.map(\.id) }
             + (results.weaker.isEmpty ? [] : [Self.weakerToggle])
             + (showWeaker ? results.weaker.map(\.id) : [])
     }
     var rows: [ResultRow] { results.groups.flatMap(\.rows) + (showWeaker ? results.weaker : []) }
     var selectedRow: ResultRow? { rows.first { $0.id == selection } }
+    var selectedApp: AppEntry? { apps.first { $0.id == selection } }
 
     // MARK: Showing
 
@@ -99,6 +103,7 @@ final class SearchPanelController {
         let started = Date()
         shownAt = started
         engine.prewarm()
+        catalog.refreshIfStale { [weak self] in self?.appsChanged() }
         let window = self.window ?? makeWindow()
         placeWindow(window)
         if AppController.offscreen { return }
@@ -169,6 +174,7 @@ final class SearchPanelController {
         isCode = codeText != nil
         let code = isCode
         let text = codeText ?? typed
+        apps = code ? [] : catalog.matches(typed)
         guard !typed.isEmpty else {
             results = .empty
             selection = nil
@@ -184,6 +190,10 @@ final class SearchPanelController {
             resizeWindow()
             return
         }
+        if !rowIDs.contains(where: { $0 == selection }) || selection?.hasPrefix(AppCatalog.rowPrefix) == true {
+            selection = rowIDs.first
+        }
+        if !apps.isEmpty, phase == .empty { phase = .words; resizeWindow() }
         // Words now. The last word is probably half-typed, so it matches as a prefix.
         Task {
             let started = Date()
@@ -231,6 +241,17 @@ final class SearchPanelController {
         self.phase = phase
         resizeWindow()
         if QLPreviewPanel.sharedPreviewPanelExists(), QLPreviewPanel.shared().isVisible { updateQuickLook() }
+    }
+
+    /// The app list was read again: what's typed may match other apps now.
+    private func appsChanged() {
+        guard !isCode else { return }
+        apps = catalog.matches(query)
+        if !navigated || !rowIDs.contains(where: { $0 == selection }) { selection = rowIDs.first }
+        if !apps.isEmpty, phase == .empty, !query.trimmingCharacters(in: .whitespaces).isEmpty {
+            phase = .words
+            resizeWindow()
+        }
     }
 
     func toggleWeaker() {
@@ -354,27 +375,37 @@ final class SearchPanelController {
         navigated = true
     }
 
+    func select(_ app: AppEntry) {
+        selection = app.id
+        navigated = true
+    }
+
     // MARK: Actions
 
     /// ↩: the file in its app, at the page or moment that matched when the app can be told where.
     func openSelected() {
+        if let app = selectedApp {
+            catalog.launch(app)
+            hide()
+            return
+        }
         guard let row = selectedRow else { return }
         engine.open(row)
         hide()
     }
 
     func revealSelected() {
-        guard let row = selectedRow else { return }
-        NSWorkspace.shared.activateFileViewerSelecting([row.url])
+        guard let url = selectedApp?.url ?? selectedRow?.url else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
         hide()
     }
 
     func copySelected() {
-        guard let row = selectedRow else { return }
+        guard let url = selectedApp?.url ?? selectedRow?.url else { return }
         pasteboard.clearContents()
         // As a file, like ⌘C in Finder: paste into a folder, a chat or a mail.
-        pasteboard.writeObjects([row.url as NSURL])
-        flash("Copied \(row.name)")
+        pasteboard.writeObjects([url as NSURL])
+        flash("Copied \(selectedApp?.name ?? url.lastPathComponent)")
     }
 
     /// The search window, with this query (and only one kind, if given): for a bigger look.
@@ -425,7 +456,7 @@ final class SearchPanelController {
         let panel = QLPreviewPanel.shared()!
         if QLPreviewPanel.sharedPreviewPanelExists(), panel.isVisible {
             panel.orderOut(nil)
-        } else if selectedRow != nil {
+        } else if selectedRow != nil || selectedApp != nil {
             updateQuickLook()
             panel.makeKeyAndOrderFront(nil)
         }
@@ -433,7 +464,7 @@ final class SearchPanelController {
 
     /// Quick Look shows the selected result at its page or moment.
     private func updateQuickLook() {
-        window?.previewURL = selectedRow?.url
+        window?.previewURL = selectedApp?.url ?? selectedRow?.url
         QLPreviewPanel.shared().reloadData()
         QuickLookMoment.show(selectedRow, in: QLPreviewPanel.shared())
     }

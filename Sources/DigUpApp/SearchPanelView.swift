@@ -58,7 +58,7 @@ struct SearchPanelView: View {
     @ViewBuilder private var content: some View {
         if controller.phase == .codeHint || controller.phase == .codeOff {
             CodeHint(controller: controller)
-        } else if controller.results.isEmpty {
+        } else if controller.results.isEmpty, controller.apps.isEmpty {
             VStack(spacing: 8) {
                 if controller.phase == .words {
                     Text("Searching…").foregroundStyle(.secondary)
@@ -84,7 +84,10 @@ struct SearchPanelView: View {
                     .frame(width: SearchPanelController.listWidth)
                 Divider()
                 Group {
-                    if let row = controller.selectedRow {
+                    if let app = controller.selectedApp {
+                        AppPreview(app: app, open: { controller.openSelected() },
+                                   reveal: { controller.revealSelected() })
+                    } else if let row = controller.selectedRow {
                         VStack(alignment: .leading, spacing: 10) {
                             PreviewPane(row: row, imageSize: CGSize(width: 410, height: 214),
                                         open: { controller.openSelected() })
@@ -119,6 +122,7 @@ struct SearchPanelView: View {
     /// The keys, saying where ↩ and Space go for a page or moment: "↩ Open at 0:06   ␣ Quick Look at 0:06", and for
     /// code, at which line: "↩ Open in Zed at line 12".
     private var keysText: String {
+        if controller.selectedApp != nil { return "↩ Open   ⌘↩ Reveal   ␣ Quick Look   ⌘C Copy" }
         let row = controller.selectedRow
         if let row, row.kind == .code {
             let line = row.segment == .lines ? " at line \(row.codeLine)" : ""
@@ -144,7 +148,9 @@ struct SearchPanelView: View {
             if !controller.isCode, let caveat = controller.model.resultsCaveat { return caveat }
             let count = controller.results.strongRows.count
             let weaker = controller.results.weaker.count
-            return (count == 1 ? "1 result" : "\(count) results") + (controller.isCode ? " in your code" : "")
+            let apps = controller.apps.count
+            return (apps == 0 ? "" : apps == 1 ? "1 app · " : "\(apps) apps · ")
+                + (count == 1 ? "1 result" : "\(count) results") + (controller.isCode ? " in your code" : "")
                 + (weaker > 0 ? " · \(weaker) weaker" : "")
         }
     }
@@ -157,6 +163,19 @@ private struct ResultList: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 1) {
+                    if !controller.apps.isEmpty {
+                        GroupHeader(title: "Applications")
+                        ForEach(controller.apps) { app in
+                            AppRow(app: app, selected: app.id == controller.selection)
+                                .id(app.id)
+                                .overlay(FileDragArea(url: app.url, openTitle: "Open",
+                                                      onClick: { controller.select(app) },
+                                                      onOpen: {
+                                                          controller.select(app)
+                                                          controller.openSelected()
+                                                      }))
+                        }
+                    }
                     ForEach(controller.results.groups) { group in
                         GroupHeader(title: group.kind.title)
                         ForEach(group.rows) { row in
@@ -547,6 +566,75 @@ private struct CodeHint: View {
             }
         }
         .font(.system(size: 13))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// An app in the panel's list: its icon, name and folder.
+private struct AppRow: View {
+    let app: AppEntry
+    let selected: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ThumbnailView(url: app.url, side: 36, iconOnly: true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(app.name)
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
+                Text(tildePath(app.url.deletingLastPathComponent().path))
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.head)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(selected ? Color.accentColor.opacity(0.24) : Color.clear))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Application, \(app.name)")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+/// The selected app, big: its icon, name, version and where it is.
+private struct AppPreview: View {
+    let app: AppEntry
+    let open: () -> Void
+    let reveal: () -> Void
+
+    private var version: String? {
+        Bundle(url: app.url)?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+    }
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Spacer(minLength: 0)
+            Image(nsImage: NSWorkspace.shared.icon(forFile: app.url.path))
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 128, height: 128)
+            Text(app.name).font(.system(size: 18, weight: .semibold))
+            Text(["Application", version.map { "Version \($0)" }].compactMap { $0 }.joined(separator: " · "))
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+            Text(tildePath(app.url.path))
+                .font(.system(size: 11))
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            HStack(spacing: 8) {
+                Button("Open", action: open)
+                Button("Show in Finder", action: reveal)
+            }
+            .controlSize(.small)
+            .padding(.top, 4)
+            Spacer(minLength: 0)
+        }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
