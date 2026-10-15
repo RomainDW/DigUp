@@ -58,7 +58,7 @@ struct SearchPanelView: View {
     @ViewBuilder private var content: some View {
         if controller.phase == .codeHint || controller.phase == .codeOff {
             CodeHint(controller: controller)
-        } else if controller.results.isEmpty, controller.apps.isEmpty {
+        } else if controller.results.isEmpty, controller.apps.isEmpty, controller.calculation == nil {
             VStack(spacing: 8) {
                 if controller.phase == .words {
                     Text("Searching…").foregroundStyle(.secondary)
@@ -84,7 +84,9 @@ struct SearchPanelView: View {
                     .frame(width: SearchPanelController.listWidth)
                 Divider()
                 Group {
-                    if let app = controller.selectedApp {
+                    if let calculation = controller.selectedCalculation {
+                        CalculationPreview(calculation: calculation, copy: { controller.copySelected() })
+                    } else if let app = controller.selectedApp {
                         AppPreview(app: app, open: { controller.openSelected() },
                                    reveal: { controller.revealSelected() })
                     } else if let row = controller.selectedRow {
@@ -122,6 +124,7 @@ struct SearchPanelView: View {
     /// The keys, saying where ↩ and Space go for a page or moment: "↩ Open at 0:06   ␣ Quick Look at 0:06", and for
     /// code, at which line: "↩ Open in Zed at line 12".
     private var keysText: String {
+        if controller.selectedCalculation != nil { return "↩ Copy and close   ⌘C Copy" }
         if controller.selectedApp != nil { return "↩ Open   ⌘↩ Reveal   ␣ Quick Look   ⌘C Copy" }
         let row = controller.selectedRow
         if let row, row.kind == .code {
@@ -163,6 +166,15 @@ private struct ResultList: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 1) {
+                    if let calculation = controller.calculation {
+                        GroupHeader(title: "Calculator")
+                        CalculationRow(calculation: calculation,
+                                       selected: controller.selection == Calculation.rowID)
+                            .id(Calculation.rowID)
+                            .contentShape(Rectangle())
+                            .onTapGesture(count: 2) { controller.copySelected() }
+                            .onTapGesture { controller.selectCalculation() }
+                    }
                     if !controller.apps.isEmpty {
                         GroupHeader(title: "Applications")
                         ForEach(controller.apps) { app in
@@ -635,6 +647,68 @@ private struct AppPreview: View {
             .padding(.top, 4)
             Spacer(minLength: 0)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// The result of the sum typed, in the list: "= 12" over the sum.
+private struct CalculationRow: View {
+    let calculation: Calculation
+    let selected: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "equal.square.fill")
+                .font(.system(size: 28))
+                .foregroundStyle(Brand.gradient)
+                .frame(width: 36, height: 36)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(calculation.display)
+                    .font(.system(size: 15, weight: .semibold).monospacedDigit())
+                    .lineLimit(1)
+                    .textSelection(.enabled)
+                Text(calculation.expression)
+                    .font(.system(size: 11).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(selected ? Color.accentColor.opacity(0.24) : Color.clear))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Result, \(calculation.display)")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+/// The result, big, with the sum it came from.
+private struct CalculationPreview: View {
+    let calculation: Calculation
+    let copy: () -> Void
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Spacer(minLength: 0)
+            Text(calculation.expression)
+                .font(.system(size: 15).monospacedDigit())
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+            Text("= " + calculation.display)
+                .font(.system(size: 40, weight: .semibold).monospacedDigit())
+                .lineLimit(1)
+                .minimumScaleFactor(0.4)
+                .textSelection(.enabled)
+            Button("Copy \(calculation.text)", action: copy)
+                .controlSize(.small)
+                .padding(.top, 6)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

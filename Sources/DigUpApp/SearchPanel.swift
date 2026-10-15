@@ -39,6 +39,8 @@ final class SearchPanelController {
     private(set) var results = ResultSet.empty
     /// Apps whose name matches, listed above the files (fork: the panel launches apps too).
     private(set) var apps: [AppEntry] = []
+    /// The result of a sum typed in the field ("10 + 2"), listed first, ↩ copies it (fork).
+    private(set) var calculation: Calculation?
     private(set) var showWeaker = false
     private(set) var selection: String?
     private(set) var phase = SearchPhase.empty
@@ -85,13 +87,14 @@ final class SearchPanelController {
     var isPreviewing: Bool { QLPreviewPanel.sharedPreviewPanelExists() && QLPreviewPanel.shared().isVisible }
     /// The selectable rows in order: strong results group by group, the fold, then the weaker ones if unfolded.
     var rowIDs: [String] {
-        apps.map(\.id) + results.groups.flatMap { $0.rows.map(\.id) }
+        (calculation == nil ? [] : [Calculation.rowID]) + apps.map(\.id) + results.groups.flatMap { $0.rows.map(\.id) }
             + (results.weaker.isEmpty ? [] : [Self.weakerToggle])
             + (showWeaker ? results.weaker.map(\.id) : [])
     }
     var rows: [ResultRow] { results.groups.flatMap(\.rows) + (showWeaker ? results.weaker : []) }
     var selectedRow: ResultRow? { rows.first { $0.id == selection } }
     var selectedApp: AppEntry? { apps.first { $0.id == selection } }
+    var selectedCalculation: Calculation? { selection == Calculation.rowID ? calculation : nil }
 
     // MARK: Showing
 
@@ -175,6 +178,7 @@ final class SearchPanelController {
         let code = isCode
         let text = codeText ?? typed
         apps = code ? [] : catalog.matches(typed)
+        calculation = code ? nil : Calculation(typed)
         guard !typed.isEmpty else {
             results = .empty
             selection = nil
@@ -190,10 +194,8 @@ final class SearchPanelController {
             resizeWindow()
             return
         }
-        if !rowIDs.contains(where: { $0 == selection }) || selection?.hasPrefix(AppCatalog.rowPrefix) == true {
-            selection = rowIDs.first
-        }
-        if !apps.isEmpty, phase == .empty { phase = .words; resizeWindow() }
+        selection = rowIDs.first
+        if !apps.isEmpty || calculation != nil, phase == .empty { phase = .words; resizeWindow() }
         // Words now. The last word is probably half-typed, so it matches as a prefix.
         Task {
             let started = Date()
@@ -375,6 +377,11 @@ final class SearchPanelController {
         navigated = true
     }
 
+    func selectCalculation() {
+        selection = Calculation.rowID
+        navigated = true
+    }
+
     func select(_ app: AppEntry) {
         selection = app.id
         navigated = true
@@ -384,6 +391,11 @@ final class SearchPanelController {
 
     /// ↩: the file in its app, at the page or moment that matched when the app can be told where.
     func openSelected() {
+        if selectedCalculation != nil {
+            copySelected()
+            hide()
+            return
+        }
         if let app = selectedApp {
             catalog.launch(app)
             hide()
@@ -401,6 +413,12 @@ final class SearchPanelController {
     }
 
     func copySelected() {
+        if let calculation = selectedCalculation {
+            pasteboard.clearContents()
+            pasteboard.setString(calculation.text, forType: .string)
+            flash("Copied \(calculation.text)")
+            return
+        }
         guard let url = selectedApp?.url ?? selectedRow?.url else { return }
         pasteboard.clearContents()
         // As a file, like ⌘C in Finder: paste into a folder, a chat or a mail.

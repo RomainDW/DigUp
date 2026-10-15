@@ -13,7 +13,8 @@ macOS 14 or later · Free and open source<br>
 <p align="center"><img src="docs/demo.gif" width="800" alt="DigUp's search panel finding a zebra in a video, a podcast moment, a clause in a lease, a dog on the beach in English, Bengali and Arabic, and code that opens in Zed"></p>
 
 > **Fork (RomainDW/DigUp).** The search panel also launches apps: type part of an app's name ("fin" for Finder,
-> "vsc" for Visual Studio Code) and they're listed above the files, ↩ opens. In-app updates are off (they'd install
+> "vsc" for Visual Studio Code) and they're listed above the files, ↩ opens. It also does sums: "10 + 2",
+> "200 + 10%", "(3,5 + 1) / 2", "2^10", "sqrt(2)" show the result first, and ↩ or ⌘C copies it. In-app updates are off (they'd install
 > the original over this build); the original's changes are merged by hand. Build with `./build.sh`.
 
 EmbeddingGemma 2 is the multimodal embedding model Google DeepMind released in October 2026. It puts text, images,
