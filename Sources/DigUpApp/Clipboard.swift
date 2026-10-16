@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import DigUpKit
 import Observation
 
@@ -79,6 +80,15 @@ final class ClipboardHistory {
             MainActor.assumeIsolated { self?.poll() }
         }
         timer?.tolerance = 0.2
+        // Copied videos were only checked by their names before frames were: once, check them again.
+        if !AppSettings.defaults.bool(forKey: "clipboardVideosRechecked") {
+            AppSettings.defaults.set(true, forKey: "clipboardVideosRechecked")
+            for index in items.indices where items[index].kind == .files && items[index].safety == .safe
+                && (items[index].paths ?? []).contains(where: {
+                    Self.videoExtensions.contains(($0 as NSString).pathExtension.lowercased()) }) {
+                items[index].safety = .unchecked
+            }
+        }
         // Anything left unchecked last time (the model wasn't there, or the app quit first).
         for item in items where item.safety == .unchecked { check(item) }
     }
@@ -186,33 +196,75 @@ final class ClipboardHistory {
         if item.safety == .unchecked { check(item) }
     }
 
-    /// Words and sites first (at once), then the model: by meaning for a text, by what it shows for a picture (a
-    /// copied picture file too). Until the model has answered, it stays masked.
+    /// Words and sites first (at once), then the model: by meaning for a text, by what it shows for a picture, and
+    /// for a video by a few of its frames. Copied files are checked the same way (up to `maxCheckedFiles` of them).
+    /// Until the model has answered, it stays masked.
     private func check(_ item: ClipItem) {
         let words = [item.text, item.paths?.joined(separator: " "), item.source].compactMap { $0 }.joined(separator: " ")
         if SafetyFilter.isExplicit(text: words) {
             setSafety(.explicit, of: item.id)
             return
         }
-        let picture: String? = switch item.kind {
-        case .image: imageURL(item)?.path
-        case .files: item.paths?.first { ["png", "jpg", "jpeg", "heic", "webp", "gif", "tiff", "bmp"]
-                .contains(($0 as NSString).pathExtension.lowercased()) }
-        case .text: nil
+        var pictures: [String] = [], videos: [String] = []
+        switch item.kind {
+        case .image: pictures = imageURL(item).map { [$0.path] } ?? []
+        case .files:
+            for path in (item.paths ?? []).prefix(Self.maxCheckedFiles) {
+                let ext = (path as NSString).pathExtension.lowercased()
+                if Self.pictureExtensions.contains(ext) { pictures.append(path) }
+                if Self.videoExtensions.contains(ext) { videos.append(path) }
+            }
+        case .text: break
         }
         let text = item.kind == .text ? item.text : nil
+        let frames = folder.appendingPathComponent("frames")
         Task {
-            var explicit: Bool?
-            if let picture {
-                explicit = await checker.isExplicit(imageAt: picture)
-            } else if let text {
-                explicit = await checker.isExplicit(text: text)
-            } else {
-                explicit = false   // files that aren't pictures: their names were checked above
+            var answers: [Bool?] = []
+            for picture in pictures { answers.append(await checker.isExplicit(imageAt: picture)) }
+            for video in videos { answers.append(await checkVideo(video, frames: frames)) }
+            if let text { answers.append(await checker.isExplicit(text: text)) }
+            // Explicit if anything is; couldn't check if something couldn't (stays masked, tried again next launch);
+            // files that are neither pictures nor videos were checked by their names above.
+            if answers.contains(true) {
+                setSafety(.explicit, of: item.id)
+            } else if !answers.contains(where: { $0 == nil }) {
+                setSafety(.safe, of: item.id)
             }
-            guard let explicit else { return }   // couldn't check: stays masked, tried again next launch
-            setSafety(explicit ? .explicit : .safe, of: item.id)
         }
+    }
+
+    static let maxCheckedFiles = 5
+    static let pictureExtensions: Set<String> = ["png", "jpg", "jpeg", "heic", "webp", "gif", "tiff", "bmp"]
+    static let videoExtensions: Set<String> = ["mp4", "mov", "m4v", "webm", "mkv", "avi", "gif"]
+    /// Frames taken from a video: spread over it, so a scene that's only in the middle is seen.
+    static let videoFrames = 6
+
+    /// True if any of a few frames spread over the video looks explicit; nil if no frame could be read or checked.
+    private func checkVideo(_ path: String, frames folder: URL) async -> Bool? {
+        let asset = AVURLAsset(url: URL(fileURLWithPath: path))
+        guard let duration = try? await asset.load(.duration), duration.seconds > 0 else { return nil }
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 768, height: 768)
+        generator.requestedTimeToleranceBefore = CMTime(seconds: 1, preferredTimescale: 600)
+        generator.requestedTimeToleranceAfter = CMTime(seconds: 1, preferredTimescale: 600)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        var checked = 0
+        for index in 0..<Self.videoFrames {
+            let time = CMTime(seconds: duration.seconds * (Double(index) + 0.5) / Double(Self.videoFrames),
+                              preferredTimescale: 600)
+            guard let frame = try? await generator.image(at: time).image,
+                  let png = NSBitmapImageRep(cgImage: frame).representation(using: .png, properties: [:]) else {
+                continue
+            }
+            let file = folder.appendingPathComponent(UUID().uuidString + ".png")
+            guard (try? png.write(to: file)) != nil else { continue }
+            let answer = await checker.isExplicit(imageAt: file.path)
+            try? FileManager.default.removeItem(at: file)
+            if answer == true { return true }
+            if answer != nil { checked += 1 }
+        }
+        return checked > 0 ? false : nil
     }
 
     private func setSafety(_ safety: ClipItem.Safety, of id: UUID) {

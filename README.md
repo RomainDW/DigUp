@@ -17,7 +17,7 @@ macOS 14 or later · Free and open source<br>
 > "200 + 10%", "(3,5 + 1) / 2", "2^10", "sqrt(2)" show the result first, and ↩ or ⌘C copies it. And it keeps a
 > clipboard history: type `clip:` (or `cb:`) and what to look for. ↩ copies an item back, ⌘⌫ forgets it. Password
 > managers' copies are never kept. What looks NSFW is masked (adult sites and explicit words, then EmbeddingGemma 2 on
-> this Mac for the meaning of texts and what pictures show); ⌘U shows it until the panel closes. In-app updates are off (they'd install
+> this Mac for the meaning of texts and what pictures and videos show); ⌘U shows it until the panel closes. In-app updates are off (they'd install
 > the original over this build); the original's changes are merged by hand. Build with `./build.sh`.
 
 EmbeddingGemma 2 is the multimodal embedding model Google DeepMind released in October 2026. It puts text, images,
