@@ -135,6 +135,8 @@ final class SearchWindowController: NSObject, NSWindowDelegate {
             search.filter = kinds[index]
         case 26 where modifiers == .command && app.model.hasCode:   // ⌘7: code
             search.filter = .code
+        case 32 where modifiers == .command:   // ⌘U: show what's masked as NSFW, until the window closes (fork)
+            SafetyIndex.shared.revealed.toggle()
         case 8 where modifiers == .command && search.navigated:   // ⌘C
             guard let row = search.selectedRow else { return false }
             NSPasteboard.general.clearContents()
@@ -166,7 +168,7 @@ final class SearchWindowController: NSObject, NSWindowDelegate {
 
     /// Quick Look shows the selected result at its page or moment.
     private func updateQuickLook() {
-        window?.previewURL = search.selectedRow?.url
+        window?.previewURL = search.selectedRow.flatMap { $0.masked ? nil : $0.url }
         QLPreviewPanel.shared().reloadData()
         QuickLookMoment.show(search.selectedRow, in: QLPreviewPanel.shared())
     }
@@ -612,6 +614,8 @@ private struct GridCell: View {
                         Image(systemName: "waveform")
                             .font(.system(size: 34, weight: .light))
                             .foregroundStyle(Brand.gradient)
+                    } else if row.masked {
+                        Image(systemName: "eye.slash").font(.system(size: 30, weight: .light)).foregroundStyle(.tertiary)
                     } else {
                         MomentThumbnail(row: row)
                     }
@@ -634,7 +638,7 @@ private struct GridCell: View {
                 .strokeBorder(selected ? Color.accentColor : Color.primary.opacity(0.08), lineWidth: selected ? 3 : 0.5)
                 .padding(selected ? -3 : 0))
             VStack(alignment: .leading, spacing: 1) {
-                Text(row.title)
+                Text(row.shownTitle)
                     .font(.system(size: 12, weight: .medium))
                     .lineLimit(1)
                     .truncationMode(.middle)

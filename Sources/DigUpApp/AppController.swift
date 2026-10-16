@@ -351,6 +351,7 @@ final class AppController {
         DispatchQueue.main.async { [self] in
             let open = [searchWindow?.isVisible, settingsWindow?.isVisible, onboarding?.isVisible]
                 .contains { $0 == true }
+            if searchWindow?.isVisible != true { SafetyIndex.shared.revealed = false }   // ⌘U lasts until it closes
             if !open {
                 NSApp.setActivationPolicy(.accessory)
                 Thumbnails.shared.clear()

@@ -168,6 +168,7 @@ final class SearchPanelController {
         removeKeyMonitor()
         PreviewPlayback.shared.stop()
         revealHidden = false
+        SafetyIndex.shared.revealed = false
         if let activity { ProcessInfo.processInfo.endActivity(activity) }
         activity = nil
         Thumbnails.shared.clear()
@@ -422,6 +423,7 @@ final class SearchPanelController {
 
     func toggleRevealHidden() {
         revealHidden.toggle()
+        SafetyIndex.shared.revealed = revealHidden
         flash(revealHidden ? "Showing hidden items until the panel closes" : "Hiding them again")
         if QLPreviewPanel.sharedPreviewPanelExists(), QLPreviewPanel.shared().isVisible { updateQuickLook() }
     }
@@ -562,7 +564,7 @@ final class SearchPanelController {
 
     /// Quick Look shows the selected result at its page or moment.
     private func updateQuickLook() {
-        window?.previewURL = selectedApp?.url ?? selectedRow?.url ?? quickLookClipURL
+        window?.previewURL = selectedApp?.url ?? selectedRow.flatMap { $0.masked ? nil : $0.url } ?? quickLookClipURL
         QLPreviewPanel.shared().reloadData()
         QuickLookMoment.show(selectedRow, in: QLPreviewPanel.shared())
     }

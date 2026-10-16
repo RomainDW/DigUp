@@ -205,3 +205,16 @@ nonisolated final class ImageSafetyChecker: @unchecked Sendable {
         return zip(a, b).reduce(0) { $0 + $1.0 * $1.1 }
     }
 }
+
+/// The indexed files that look NSFW, by the vectors already in the index (`Engine.refreshFlagged`): search results
+/// mask them (thumbnail, preview, name, Quick Look) until ⌘U (fork).
+@Observable
+final class SafetyIndex {
+    static let shared = SafetyIndex()
+
+    var flagged: Set<String> = []
+    /// ⌘U in the panel or the window: shown until the panel hides or the window closes.
+    var revealed = false
+
+    func hides(_ path: String) -> Bool { !revealed && flagged.contains(path) }
+}

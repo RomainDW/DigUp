@@ -87,6 +87,32 @@ public final class Searcher {
         vectorsLoaded = true
     }
 
+    /// The files with a picture or a video frame closer to one of `flagged` than to any of `ordinary` by more than
+    /// `margin` (cosine, against normalized text vectors): what the app masks as NSFW (fork). Nil when the vectors
+    /// aren't loaded.
+    public func imagePaths(closerTo flagged: [[Float]], than ordinary: [[Float]], margin: Float) -> Set<String>? {
+        guard vectorsLoaded else { return nil }
+        guard !rowFile.isEmpty, !flagged.isEmpty, !ordinary.isEmpty else { return [] }
+        func best(_ labels: [[Float]]) -> [Float] {
+            var best = [Float](repeating: -.infinity, count: rowFile.count)
+            for label in labels where label.count == Vectors.dimension {
+                for (row, score) in score(label).enumerated() where score > best[row] { best[row] = score }
+            }
+            return best
+        }
+        let (high, low) = (best(flagged), best(ordinary))
+        var files = Set<Int64>()
+        for row in rowFile.indices where rowModality[row] == .image && high[row] - low[row] > margin {
+            files.insert(rowFile[row])
+        }
+        guard !files.isEmpty else { return [] }
+        var paths = Set<String>()
+        try? store.db.query("SELECT path FROM files WHERE id IN (\(files.map(String.init).joined(separator: ",")))") {
+            if let path = $0.text(0) { paths.insert(path) }
+        }
+        return paths
+    }
+
     /// Frees the vectors' memory; keyword search keeps working.
     public func releaseVectors() {
         matrix = nil

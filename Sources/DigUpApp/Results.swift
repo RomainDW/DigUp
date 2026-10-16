@@ -52,6 +52,11 @@ struct ResultRow: Identifiable, Equatable {
     /// The name to show: left to right as Finder shows it, also when it starts in Arabic ("ملاحظة.md", not "md.ملاحظة").
     var title: String { "\u{200E}" + name }
 
+    /// It looks NSFW and isn't shown (fork): no picture, no name, no Quick Look, until ⌘U.
+    var masked: Bool { SafetyIndex.shared.hides(id) }
+    /// The name, or what stands for it while it's masked.
+    var shownTitle: String { masked ? "Hidden: NSFW" : title }
+
     /// The words keyword search found in the excerpt (marked « »), as they're written there.
     var foundWords: [String] {
         guard let excerpt else { return [] }

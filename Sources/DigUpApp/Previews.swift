@@ -128,6 +128,14 @@ struct PreviewPane: View {
     var open: () -> Void = {}
 
     var body: some View {
+        if row.masked {
+            MaskedPreview()
+        } else {
+            preview
+        }
+    }
+
+    private var preview: some View {
         VStack(alignment: .leading, spacing: 0) {
             PreviewPicture(row: row, size: imageSize, open: open)
                 .frame(maxWidth: .infinity)

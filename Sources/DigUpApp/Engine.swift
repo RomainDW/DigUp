@@ -925,6 +925,7 @@ nonisolated final class Engine: @unchecked Sendable {
             encoderFailed = false   // opening the panel is a fresh chance
             if runningEncoder() != nil { scheduleIdleExit() }
         }
+        defer { refreshFlagged() }
         searchQueue.async { [self] in
             guard let searcher, !searcher.vectorsLoaded else { return }
             let started = Date()
@@ -933,6 +934,41 @@ nonisolated final class Engine: @unchecked Sendable {
                 log("engine: \(searcher.vectorCount) vectors loaded in \(ms(since: started))")
             } catch {
                 log("can't load vectors: \(error)")
+            }
+        }
+    }
+
+    // MARK: NSFW results (fork)
+
+    /// The descriptions `SafetyIndex` compares pictures with, embedded once. encoderQueue only.
+    private var flaggedLabels: (flagged: [[Float]], ordinary: [[Float]])?
+    /// The number of vectors the flagged files were found among. searchQueue only.
+    private var flaggedFor = -1
+
+    /// Finds the indexed pictures and video frames that look NSFW, by the vectors already in the index (no picture is
+    /// read again), whenever the vectors have changed since the last time. Runs after `prewarm`'s loading.
+    func refreshFlagged() {
+        encoderQueue.async { [self] in
+            if flaggedLabels == nil, let worker = runningEncoder() {
+                defer { scheduleIdleExit() }
+                func normalized(_ vector: [Float]) -> [Float] {
+                    let length = vector.reduce(0) { $0 + $1 * $1 }.squareRoot()
+                    return length > 0 ? vector.map { $0 / length } : vector
+                }
+                if let flagged = try? worker.embedTexts(ImageSafetyChecker.explicit.map(Prompts.query)),
+                   let ordinary = try? worker.embedTexts(ImageSafetyChecker.ordinary.map(Prompts.query)) {
+                    flaggedLabels = (flagged.map(normalized), ordinary.map(normalized))
+                }
+            }
+            guard let labels = flaggedLabels else { return }
+            searchQueue.async { [self] in
+                guard let searcher, searcher.vectorsLoaded, searcher.vectorCount != flaggedFor else { return }
+                let started = Date()
+                guard let paths = searcher.imagePaths(closerTo: labels.flagged, than: labels.ordinary,
+                                                      margin: ImageSafetyChecker.margin) else { return }
+                flaggedFor = searcher.vectorCount
+                log("safety: \(paths.count) files masked as NSFW, in \(ms(since: started))")
+                DispatchQueue.main.async { MainActor.assumeIsolated { SafetyIndex.shared.flagged = paths } }
             }
         }
     }

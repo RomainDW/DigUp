@@ -280,16 +280,20 @@ private struct PanelRow: View {
     var body: some View {
         HStack(spacing: 10) {
             // Code's thumbnail would be a page of tiny text: its file type's icon says more.
-            ThumbnailView(url: row.url, side: 36, iconOnly: row.kind == .code)
+            if row.masked {
+                MaskedThumbnail(side: 36)
+            } else {
+                ThumbnailView(url: row.url, side: 36, iconOnly: row.kind == .code)
+            }
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Text(row.title)
+                    Text(row.shownTitle)
                         .font(.system(size: 13, weight: .semibold))
                         .lineLimit(1)
                         .truncationMode(.middle)
                     if let place = row.place { PlaceBadge(text: place) }
                 }
-                if let excerpt = row.excerpt, row.matchedWords, row.kind != .code {
+                if let excerpt = row.excerpt, row.matchedWords, row.kind != .code, !row.masked {
                     Text(highlighted(excerpt, size: 11))
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
@@ -904,5 +908,35 @@ private struct ClipPreview: View {
             }
             .frame(maxHeight: .infinity)
         }
+    }
+}
+
+/// Stands for the picture of something masked as NSFW (fork).
+struct MaskedThumbnail: View {
+    let side: CGFloat
+
+    var body: some View {
+        Image(systemName: "eye.slash")
+            .font(.system(size: side * 0.4, weight: .medium))
+            .foregroundStyle(.secondary)
+            .frame(width: side, height: side)
+            .background(Color.primary.opacity(0.06))
+            .clipShape(RoundedRectangle(cornerRadius: side > 60 ? 8 : 6, style: .continuous))
+    }
+}
+
+/// Stands for the preview of something masked as NSFW (fork).
+struct MaskedPreview: View {
+    var body: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "eye.slash").font(.system(size: 30, weight: .light)).foregroundStyle(.tertiary)
+            Text("Hidden: it looks NSFW").font(.system(size: 14, weight: .semibold))
+            Text("Press ⌘U to show hidden results until the panel or the window closes.")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 280)
+        }
+        .frame(maxWidth: .infinity, minHeight: 220)
     }
 }
