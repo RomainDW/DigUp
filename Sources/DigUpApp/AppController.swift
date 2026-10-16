@@ -13,6 +13,8 @@ final class AppController {
     let engine: Engine
     let download: ModelDownload
     let hotkeys = HotkeyCenter()
+    /// ⌥⌘V: the panel, straight on the clipboard history (fork).
+    private var clipboardHotkey: GlobalHotkey?
     let updates: Updates
     /// Everything copied, for "clip:" in the panel (fork).
     let clipboard: ClipboardHistory
@@ -73,6 +75,10 @@ final class AppController {
         updates.onSessionEnded = { [weak self] in self?.windowClosed() }
         updates.start()
         clipboard.start()
+        if let combo = KeyCombo("cmd+opt+v") {
+            clipboardHotkey = GlobalHotkey(combo, id: 2) { [weak self] in self?.panel.showClipboard() }
+            if clipboardHotkey == nil { log("hotkey: another app is using \(combo.display)") }
+        }
 
         hotkeys.onPress = { [weak self] in
             guard let self else { return }

@@ -153,6 +153,14 @@ final class SearchPanelController {
         }
     }
 
+    /// ⌥⌘V: the panel on the clipboard history, the newest item selected (fork). Pressed again, it closes.
+    func showClipboard() {
+        if isVisible, clipQuery != nil { return hide() }
+        query = ClipQuery.prefixes[0] + " "
+        show()
+        field?.currentEditor()?.selectedRange = NSRange(location: (query as NSString).length, length: 0)
+    }
+
     func hide() {
         if QLPreviewPanel.sharedPreviewPanelExists(), QLPreviewPanel.shared().isVisible {
             QLPreviewPanel.shared().orderOut(nil)
