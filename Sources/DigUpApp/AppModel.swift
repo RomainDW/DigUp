@@ -7,6 +7,8 @@ final class AppModel {
     var status = EngineStatus()
     var settings: AppSettings
     var hotkey: KeyCombo?
+    /// The clipboard history's shortcut (fork), nil when another app has it.
+    var clipboardHotkey: KeyCombo?
     let download: ModelDownload
     /// A newer DigUp the daily check found ("0.6.1"), until you open it (`Updates`).
     var updateAvailable: String?

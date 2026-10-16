@@ -216,6 +216,17 @@ private struct GeneralSettings: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                LabeledContent {
+                    ShortcutRecorder(combo: state.model.clipboardHotkey, apply: { state.app.setClipboardHotkey($0) },
+                                     listening: { state.app.hotkeyRecording($0) }, capSize: 13)
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Clipboard shortcut")
+                        Text("Opens the clipboard history (the same as typing “clip:”).")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
             Section {
                 Toggle(isOn: Binding(get: { state.launchAtLogin }, set: { on in

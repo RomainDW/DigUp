@@ -75,9 +75,11 @@ final class AppController {
         updates.onSessionEnded = { [weak self] in self?.windowClosed() }
         updates.start()
         clipboard.start()
-        if let combo = KeyCombo("cmd+opt+v") {
-            clipboardHotkey = GlobalHotkey(combo, id: 2) { [weak self] in self?.panel.showClipboard() }
-            if clipboardHotkey == nil { log("hotkey: another app is using \(combo.display)") }
+        if let combo = KeyCombo(AppSettings.defaults.string(forKey: Self.clipboardHotkeyKey) ?? Self.defaultClipboardHotkey) {
+            clipboardHotkey = makeClipboardHotkey(combo)
+            model.clipboardHotkey = clipboardHotkey?.combo
+            log(clipboardHotkey == nil ? "clipboard hotkey \(combo.display) is taken by another app"
+                : "clipboard hotkey \(combo.display)")
         }
 
         hotkeys.onPress = { [weak self] in
@@ -244,6 +246,7 @@ final class AppController {
     /// Nil when `combo` is now the hotkey, else why it can't be.
     func setHotkey(_ combo: KeyCombo) -> String? {
         if let conflict = combo.systemConflict { return conflict }
+        if combo == model.clipboardHotkey { return "\(combo.display) opens the clipboard history" }
         guard hotkeys.register(combo) else { return "Another app is using \(combo.display)" }
         AppSettings.save(hotkey: combo.spec)
         model.settings.hotkey = combo.spec
@@ -252,9 +255,40 @@ final class AppController {
         return nil
     }
 
-    /// The shortcut recorder is listening (the hotkey steps aside so pressing it reaches the recorder).
+    /// The shortcut recorder is listening (the hotkeys step aside so pressing one reaches the recorder).
     func hotkeyRecording(_ on: Bool) {
         if on { hotkeys.suspend() } else { hotkeys.resume() }
+        if on {
+            clipboardHotkey = nil
+        } else if clipboardHotkey == nil, let combo = model.clipboardHotkey {
+            clipboardHotkey = makeClipboardHotkey(combo)
+        }
+    }
+
+    // MARK: Clipboard hotkey (fork)
+
+    static let clipboardHotkeyKey = "clipboardHotkey"
+    static let defaultClipboardHotkey = "cmd+opt+v"
+
+    private func makeClipboardHotkey(_ combo: KeyCombo) -> GlobalHotkey? {
+        GlobalHotkey(combo, id: 2) { [weak self] in self?.panel.showClipboard() }
+    }
+
+    /// Nil when `combo` now opens the clipboard history, else why it can't.
+    func setClipboardHotkey(_ combo: KeyCombo) -> String? {
+        if let conflict = combo.systemConflict { return conflict }
+        if combo == model.hotkey { return "\(combo.display) is the search shortcut" }
+        let previous = clipboardHotkey
+        clipboardHotkey = nil   // the old registration goes first, in case the new one is the same keys
+        guard let new = makeClipboardHotkey(combo) else {
+            clipboardHotkey = previous ?? model.clipboardHotkey.flatMap(makeClipboardHotkey)
+            return "Another app is using \(combo.display)"
+        }
+        clipboardHotkey = new
+        AppSettings.defaults.set(combo.spec, forKey: Self.clipboardHotkeyKey)
+        model.clipboardHotkey = combo
+        log("clipboard hotkey: \(combo.display)")
+        return nil
     }
 
     // MARK: Login item
