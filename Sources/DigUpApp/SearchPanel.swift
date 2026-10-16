@@ -11,6 +11,7 @@ enum SearchPhase: Equatable {
     case wordsOnly   // final, but there's no meaning search (the model is downloading, or the encoder failed)
     case codeHint    // "code:" and nothing yet: what to type
     case codeOff     // "code:" without code folders: how to turn code search on
+    case clipboard   // "clip:": the clipboard history (fork)
 }
 
 /// The hotkey panel: type, see results grouped by kind with the selected one previewed big on the right, and open /
@@ -41,6 +42,15 @@ final class SearchPanelController {
     private(set) var apps: [AppEntry] = []
     /// The result of a sum typed in the field ("10 + 2"), listed first, ↩ copies it (fork).
     private(set) var calculation: Calculation?
+    /// What's typed after "clip:", or nil when the query isn't one of the clipboard history.
+    private(set) var clipQuery: String?
+    /// ⌘U: masked clipboard items are shown until the panel closes.
+    private(set) var revealHidden = false
+    var clips: [ClipItem] { clipQuery.map { app.clipboard.matches($0) } ?? [] }
+    var selectedClip: ClipItem? { selection.flatMap { app.clipboard.item(withRowID: $0) } }
+    func clipImageURL(_ item: ClipItem) -> URL? { app.clipboard.imageURL(item) }
+    /// Shown as it is: checked and harmless, or ⌘U.
+    func showsClip(_ item: ClipItem) -> Bool { !item.masked || revealHidden }
     private(set) var showWeaker = false
     private(set) var selection: String?
     private(set) var phase = SearchPhase.empty
@@ -87,6 +97,11 @@ final class SearchPanelController {
     var isPreviewing: Bool { QLPreviewPanel.sharedPreviewPanelExists() && QLPreviewPanel.shared().isVisible }
     /// The selectable rows in order: strong results group by group, the fold, then the weaker ones if unfolded.
     var rowIDs: [String] {
+        if clipQuery != nil { return clips.map(\.rowID) }
+        return rowIDsOfSearch
+    }
+
+    private var rowIDsOfSearch: [String] {
         (calculation == nil ? [] : [Calculation.rowID]) + apps.map(\.id) + results.groups.flatMap { $0.rows.map(\.id) }
             + (results.weaker.isEmpty ? [] : [Self.weakerToggle])
             + (showWeaker ? results.weaker.map(\.id) : [])
@@ -144,6 +159,7 @@ final class SearchPanelController {
         }
         removeKeyMonitor()
         PreviewPlayback.shared.stop()
+        revealHidden = false
         if let activity { ProcessInfo.processInfo.endActivity(activity) }
         activity = nil
         Thumbnails.shared.clear()
@@ -173,6 +189,19 @@ final class SearchPanelController {
         navigated = false
         meaningTask?.cancel()
         let typed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        // "clip:": the clipboard history, and nothing else.
+        clipQuery = ClipQuery.text(of: typed)
+        if clipQuery != nil {
+            isCode = false
+            apps = []
+            calculation = nil
+            results = .empty
+            selection = rowIDs.first
+            phase = .clipboard
+            resizeWindow()
+            onFinalResults?()
+            return
+        }
         let codeText = CodeQuery.text(of: typed)
         isCode = codeText != nil
         let code = isCode
@@ -349,6 +378,12 @@ final class SearchPanelController {
         case 16 where modifiers == .command:  // ⌘Y
             toggleQuickLook()
             return true
+        case 32 where modifiers == .command:  // ⌘U: show what the clipboard history masks, until the panel closes
+            toggleRevealHidden()
+            return true
+        case 51 where modifiers == .command && clipQuery != nil:  // ⌘⌫: forget the selected clip
+            deleteSelectedClip()
+            return true
         case 31 where modifiers == .command:  // ⌘O: the same search in the window, for a bigger look
             openInWindow()
             return true
@@ -377,6 +412,26 @@ final class SearchPanelController {
         navigated = true
     }
 
+    func toggleRevealHidden() {
+        revealHidden.toggle()
+        flash(revealHidden ? "Showing hidden items until the panel closes" : "Hiding them again")
+        if QLPreviewPanel.sharedPreviewPanelExists(), QLPreviewPanel.shared().isVisible { updateQuickLook() }
+    }
+
+    func deleteSelectedClip() {
+        guard let clip = selectedClip else { return }
+        let ids = rowIDs, index = ids.firstIndex(of: clip.rowID) ?? 0
+        app.clipboard.remove(clip)
+        let remaining = rowIDs
+        selection = remaining.isEmpty ? nil : remaining[min(index, remaining.count - 1)]
+        flash("Removed from the history")
+    }
+
+    func selectClip(_ clip: ClipItem) {
+        selection = clip.rowID
+        navigated = true
+    }
+
     func selectCalculation() {
         selection = Calculation.rowID
         navigated = true
@@ -391,6 +446,11 @@ final class SearchPanelController {
 
     /// ↩: the file in its app, at the page or moment that matched when the app can be told where.
     func openSelected() {
+        if let clip = selectedClip {
+            app.clipboard.copy(clip)
+            hide()
+            return
+        }
         if selectedCalculation != nil {
             copySelected()
             hide()
@@ -407,12 +467,18 @@ final class SearchPanelController {
     }
 
     func revealSelected() {
-        guard let url = selectedApp?.url ?? selectedRow?.url else { return }
+        guard let url = selectedApp?.url ?? selectedRow?.url
+                ?? selectedClip?.paths?.first.map(URL.init(fileURLWithPath:)) else { return }
         NSWorkspace.shared.activateFileViewerSelecting([url])
         hide()
     }
 
     func copySelected() {
+        if let clip = selectedClip {
+            app.clipboard.copy(clip, to: pasteboard)
+            flash(showsClip(clip) ? "Copied \(clip.title.prefix(40))" : "Copied")
+            return
+        }
         if let calculation = selectedCalculation {
             pasteboard.clearContents()
             pasteboard.setString(calculation.text, forType: .string)
@@ -474,15 +540,21 @@ final class SearchPanelController {
         let panel = QLPreviewPanel.shared()!
         if QLPreviewPanel.sharedPreviewPanelExists(), panel.isVisible {
             panel.orderOut(nil)
-        } else if selectedRow != nil || selectedApp != nil {
+        } else if selectedRow != nil || selectedApp != nil || quickLookClipURL != nil {
             updateQuickLook()
             panel.makeKeyAndOrderFront(nil)
         }
     }
 
+    /// A clip Quick Look can show: a picture or a file, never a masked one.
+    private var quickLookClipURL: URL? {
+        guard let clip = selectedClip, showsClip(clip) else { return nil }
+        return clipImageURL(clip) ?? clip.paths?.first.map(URL.init(fileURLWithPath:))
+    }
+
     /// Quick Look shows the selected result at its page or moment.
     private func updateQuickLook() {
-        window?.previewURL = selectedApp?.url ?? selectedRow?.url
+        window?.previewURL = selectedApp?.url ?? selectedRow?.url ?? quickLookClipURL
         QLPreviewPanel.shared().reloadData()
         QuickLookMoment.show(selectedRow, in: QLPreviewPanel.shared())
     }

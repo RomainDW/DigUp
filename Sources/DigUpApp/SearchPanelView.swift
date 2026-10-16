@@ -26,7 +26,8 @@ struct SearchPanelView: View {
     private var header: some View {
         HStack(spacing: 11) {
             // A search of code shows it: the field's magnifier becomes code's mark.
-            Image(systemName: controller.isCode ? FileKind.code.symbol : "magnifyingglass")
+            Image(systemName: controller.phase == .clipboard ? "doc.on.clipboard"
+                  : controller.isCode ? FileKind.code.symbol : "magnifyingglass")
                 .font(.system(size: controller.isCode ? 17 : 20, weight: .semibold))
                 .foregroundStyle(Brand.gradient)
                 .frame(width: 24)
@@ -56,7 +57,9 @@ struct SearchPanelView: View {
     }
 
     @ViewBuilder private var content: some View {
-        if controller.phase == .codeHint || controller.phase == .codeOff {
+        if controller.phase == .clipboard {
+            ClipboardContent(controller: controller)
+        } else if controller.phase == .codeHint || controller.phase == .codeOff {
             CodeHint(controller: controller)
         } else if controller.results.isEmpty, controller.apps.isEmpty, controller.calculation == nil {
             VStack(spacing: 8) {
@@ -124,6 +127,9 @@ struct SearchPanelView: View {
     /// The keys, saying where ↩ and Space go for a page or moment: "↩ Open at 0:06   ␣ Quick Look at 0:06", and for
     /// code, at which line: "↩ Open in Zed at line 12".
     private var keysText: String {
+        if controller.phase == .clipboard {
+            return "↩ Copy and close   ⌘C Copy   ⌘U \(controller.revealHidden ? "Hide" : "Show") hidden   ⌘⌫ Remove"
+        }
         if controller.selectedCalculation != nil { return "↩ Copy and close   ⌘C Copy" }
         if controller.selectedApp != nil { return "↩ Open   ⌘↩ Reveal   ␣ Quick Look   ⌘C Copy" }
         let row = controller.selectedRow
@@ -142,6 +148,11 @@ struct SearchPanelView: View {
             return controller.encoder == .starting ? "Matching words; meaning search is warming up…" : "Matching words…"
         case .wordsOnly:
             return controller.model.meaningUnavailable ?? "Words only: meaning search isn't available"
+        case .clipboard:
+            let clips = controller.clips
+            let hidden = clips.filter(\.masked).count
+            return (clips.count == 1 ? "1 item" : "\(clips.count) items") + " in your clipboard history"
+                + (hidden > 0 ? " · \(hidden) hidden" : "")
         case .codeHint, .codeOff:
             return controller.phase == .codeOff ? "Code search is off" : "Searching your code"
         case .meaning, .empty:
@@ -710,5 +721,188 @@ private struct CalculationPreview: View {
         }
         .padding(.horizontal, 12)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// "clip:": the clipboard history, newest first, with the selected item big on the right. What looks explicit is
+/// masked, in the list and in the preview, until ⌘U.
+private struct ClipboardContent: View {
+    let controller: SearchPanelController
+
+    var body: some View {
+        let clips = controller.clips
+        if clips.isEmpty {
+            VStack(spacing: 8) {
+                Text(controller.clipQuery?.isEmpty == false ? "Nothing copied matches" : "Nothing copied yet")
+                    .font(.system(size: 15, weight: .semibold))
+                Text("Everything you copy shows up here. Password managers' copies are never kept.")
+                    .foregroundStyle(.secondary)
+            }
+            .font(.system(size: 13))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            HStack(spacing: 0) {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 1) {
+                            GroupHeader(title: "Clipboard")
+                            ForEach(clips) { clip in
+                                ClipRow(clip: clip, shown: controller.showsClip(clip),
+                                        image: controller.clipImageURL(clip),
+                                        selected: clip.rowID == controller.selection)
+                                    .id(clip.rowID)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture(count: 2) {
+                                        controller.selectClip(clip)
+                                        controller.openSelected()
+                                    }
+                                    .onTapGesture { controller.selectClip(clip) }
+                            }
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.bottom, 8)
+                    }
+                    .onChange(of: controller.selection) { _, id in
+                        if let id { proxy.scrollTo(id) }
+                    }
+                }
+                .frame(width: SearchPanelController.listWidth)
+                Divider()
+                Group {
+                    if let clip = controller.selectedClip {
+                        ClipPreview(clip: clip, shown: controller.showsClip(clip),
+                                    image: controller.clipImageURL(clip),
+                                    copy: { controller.copySelected() },
+                                    reveal: { controller.toggleRevealHidden() })
+                    }
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            }
+        }
+    }
+}
+
+private struct ClipRow: View {
+    let clip: ClipItem
+    let shown: Bool
+    let image: URL?
+    let selected: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ZStack {
+                if clip.kind == .image, let image, shown, let picture = NSImage(contentsOf: image) {
+                    Image(nsImage: picture).resizable().aspectRatio(contentMode: .fill)
+                } else if clip.kind == .files, shown, let path = clip.paths?.first {
+                    Image(nsImage: NSWorkspace.shared.icon(forFile: path)).resizable().aspectRatio(contentMode: .fit)
+                } else {
+                    Image(systemName: shown ? (clip.kind == .text ? "text.alignleft" : "photo") : "eye.slash")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(Color.primary.opacity(0.06))
+                }
+            }
+            .frame(width: 36, height: 36)
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(shown ? clip.title : (clip.safety == .unchecked ? "Hidden until checked" : "Hidden: NSFW"))
+                    .font(.system(size: 13, weight: shown ? .regular : .semibold))
+                    .foregroundStyle(shown ? .primary : .secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Text([clip.source, clip.date.formatted(.relative(presentation: .named))]
+                        .compactMap { $0 }.joined(separator: " · "))
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(selected ? Color.accentColor.opacity(0.24) : Color.clear))
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+private struct ClipPreview: View {
+    let clip: ClipItem
+    let shown: Bool
+    let image: URL?
+    let copy: () -> Void
+    let reveal: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if shown {
+                content
+            } else {
+                VStack(spacing: 10) {
+                    Image(systemName: "eye.slash").font(.system(size: 30, weight: .light)).foregroundStyle(.tertiary)
+                    Text(clip.safety == .unchecked ? "Hidden until it's checked" : "Hidden: it looks NSFW")
+                        .font(.system(size: 14, weight: .semibold))
+                    Text(clip.safety == .unchecked
+                         ? "DigUp checks what you copy on this Mac with its model, and shows it once it's clearly fine."
+                         : "Press ⌘U to show hidden items until the panel closes.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 280)
+                    Button("Show (⌘U)", action: reveal).controlSize(.small)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            HStack(spacing: 8) {
+                Text([clip.source, clip.date.formatted(date: .abbreviated, time: .shortened)]
+                        .compactMap { $0 }.joined(separator: " · "))
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Copy", action: copy).controlSize(.small)
+            }
+        }
+    }
+
+    @ViewBuilder private var content: some View {
+        switch clip.kind {
+        case .text:
+            ScrollView {
+                Text(clip.text ?? "")
+                    .font(.system(size: 13))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: .infinity)
+        case .image:
+            if let image, let picture = NSImage(contentsOf: image) {
+                Image(nsImage: picture)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        case .files:
+            ScrollView {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(clip.paths ?? [], id: \.self) { path in
+                        HStack(spacing: 8) {
+                            Image(nsImage: NSWorkspace.shared.icon(forFile: path)).resizable().frame(width: 28, height: 28)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text((path as NSString).lastPathComponent).font(.system(size: 13, weight: .medium))
+                                Text(tildePath((path as NSString).deletingLastPathComponent))
+                                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                                    .lineLimit(1).truncationMode(.head)
+                            }
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: .infinity)
+        }
     }
 }
